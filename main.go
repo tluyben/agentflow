@@ -695,15 +695,15 @@ func executeFlow(flow Flow, input string) error {
 	}
 
 	// print the input and output
-	fmt.Println(validatedInput)
-	fmt.Println(validatedOutput)
+	// fmt.Println(validatedInput)
+	// fmt.Println(validatedOutput)
 
 	for _, step := range flow.FlowSteps {
 		valid, err := evaluateJSCondition(step.Validate, map[string]interface{}{
 			"input":  gjson.Parse(validatedInput).Value(),
 			"output": gjson.Parse(validatedOutput).Value(),
 		})
-		fmt.Println(valid)
+		// fmt.Println(valid)
 		if err != nil {
 			return fmt.Errorf("error evaluating condition: %w", err)
 		}
