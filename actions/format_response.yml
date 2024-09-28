@@ -1,0 +1,30 @@
+name: format_response
+script: |
+  function formatResponse(input) {
+    let output = JSON.parse(input);
+    let formattedOutput = {};
+
+    if (output.answer) {
+      // This is a question response
+      formattedOutput = {
+        type: "answer",
+        content: output.answer.trim(),
+        metadata: {
+          confidence: parseFloat(output.confidence).toFixed(2)
+        }
+      };
+    } else if (output.steps) {
+      // This is a task response
+      formattedOutput = {
+        type: "task",
+        content: output.steps.map(step => step.trim()),
+        metadata: {
+          estimatedTime: output.estimated_time.trim()
+        }
+      };
+    }
+
+    return JSON.stringify(formattedOutput, null, 2);
+  }
+
+  formatResponse(input);

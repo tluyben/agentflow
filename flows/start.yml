@@ -1,0 +1,24 @@
+name: start
+model: low
+action: []
+input:
+  type: object
+  properties:
+    query:
+      type: string
+output:
+  type: object
+  properties:
+    query_type:
+      type: string
+    processed_query:
+      type: string
+system-prompt: "You are an assistant that categorizes user queries. Determine if the input is a question or a task."
+prompt: "Categorize the following query as either a 'question' or a 'task'. Then rephrase it to be more clear and concise. Provide your response in JSON format with 'query_type' and 'processed_query' fields: {USER}"
+flow:
+  - validate: "output.query_type === 'question'"
+    next: "answer_question"
+  - validate: "output.query_type === 'task'"
+    next: "process_task"
+  - validate: "true"
+    next: "$END"

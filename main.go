@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -158,29 +159,107 @@ func init() {
 func openOrCreateIndex(indexPath string) (bleve.Index, error) {
 	index, err := bleve.Open(indexPath)
 	if err == bleve.ErrorIndexPathDoesNotExist {
+		log.Println("Index doesn't exist. Creating a new one.")
 		mapping := bleve.NewIndexMapping()
 		index, err = bleve.New(indexPath, mapping)
 		if err != nil {
 			return nil, fmt.Errorf("error creating new index: %w", err)
 		}
 	} else if err != nil {
-		return nil, fmt.Errorf("error opening index: %w", err)
+		log.Printf("Error opening index: %v. Attempting to delete and recreate.\n", err)
+		err = deleteIndex(indexPath)
+		if err != nil {
+			return nil, fmt.Errorf("error deleting corrupted index: %w", err)
+		}
+		mapping := bleve.NewIndexMapping()
+		index, err = bleve.New(indexPath, mapping)
+		if err != nil {
+			return nil, fmt.Errorf("error creating new index after deletion: %w", err)
+		}
 	}
 	return index, nil
 }
 
-func indexFiles(c *cli.Context) error {
-	fmt.Println("Indexing files...")
+func deleteIndex(indexPath string) error {
+	err := os.RemoveAll(indexPath)
+	if err != nil {
+		return fmt.Errorf("error deleting index directory: %w", err)
+	}
+	log.Println("Existing index deleted.")
+	return nil
+}
 
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+func isTextFile(path string) bool {
+
+	// check if the file size is > 512 length continue otherwise return false;
+	if info, err := os.Stat(path); err == nil {
+		if info.Size() < 512 {
+			return false
+		}
+	}
+		
+	file, err := os.Open(path)
+	if err != nil {
+		log.Printf("Error opening file %s: %v\n", path, err)
+		return false
+	}
+	defer file.Close()
+
+	// Read the first 512 bytes of the file
+	buffer := make([]byte, 512)
+	_, err = file.Read(buffer)
+	if err != nil {
+		log.Printf("Error reading file %s: %v\n", path, err)
+		return false
+	}
+
+	// Use the http.DetectContentType function to detect the content type
+	contentType := http.DetectContentType(buffer)
+
+	// log the content type and file name 
+	// log.Printf("Content Type: %s, File Name: %s\n", contentType, path)
+	
+	// Check if the content type starts with "text/"
+	return strings.HasPrefix(contentType, "text/")
+}
+
+func indexFiles(c *cli.Context) error {
+	log.Println("Starting indexing process...")
+
+	// Delete existing index before reindexing
+	err := deleteIndex("agentflow.bleve")
+	if err != nil {
+		return fmt.Errorf("error deleting existing index: %w", err)
+	}
+
+	// Recreate the index
+	searchIndex, err = openOrCreateIndex("agentflow.bleve")
+	if err != nil {
+		return fmt.Errorf("error creating new index: %w", err)
+	}
+
+	batch := searchIndex.NewBatch()
+	batchCount := 0
+	maxBatchSize := 100
+
+	err = filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			log.Printf("Error accessing path %q: %v\n", path, err)
 			return err
 		}
 
-		if !info.IsDir() {
+		// Skip .git directory, .bleve directory, and their contents
+		if info.IsDir() && (info.Name() == ".git" || info.Name() == "agentflow.bleve" || 
+			strings.Contains(path, string(os.PathSeparator)+".git"+string(os.PathSeparator)) ||
+			strings.Contains(path, string(os.PathSeparator)+"agentflow.bleve"+string(os.PathSeparator))) {
+			return filepath.SkipDir
+		}
+
+		if !info.IsDir() && isTextFile(path) {
 			content, err := ioutil.ReadFile(path)
 			if err != nil {
-				return fmt.Errorf("error reading file %s: %w", path, err)
+				log.Printf("Error reading file %s: %v\n", path, err)
+				return nil // Continue with next file
 			}
 
 			doc := struct {
@@ -191,22 +270,44 @@ func indexFiles(c *cli.Context) error {
 				Content: string(content),
 			}
 
-			err = searchIndex.Index(doc.ID, doc)
+			err = batch.Index(doc.ID, doc)
 			if err != nil {
-				return fmt.Errorf("error indexing document %s: %w", path, err)
+				log.Printf("Error adding document %s to batch: %v\n", path, err)
+				return nil // Continue with next file
 			}
 
-			fmt.Printf("Indexed: %s\n", path)
+			batchCount++
+			log.Printf("Added to batch: %s\n", path)
+
+			if batchCount >= maxBatchSize {
+				err = searchIndex.Batch(batch)
+				if err != nil {
+					log.Printf("Error indexing batch: %v\n", err)
+					// Here, we could choose to return the error if it's critical
+					// For now, we'll log it and continue
+				}
+				batch = searchIndex.NewBatch()
+				batchCount = 0
+			}
 		}
 
 		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("error indexing files: %w", err)
+		log.Printf("Error walking file path: %v\n", err)
+		// Decide whether to return here or continue with indexing the documents we've gathered
 	}
 
-	fmt.Println("Indexing complete.")
+	// Index any remaining documents
+	if batchCount > 0 {
+		err = searchIndex.Batch(batch)
+		if err != nil {
+			log.Printf("Error indexing final batch: %v\n", err)
+		}
+	}
+
+	log.Println("Indexing complete.")
 	return nil
 }
 
@@ -472,7 +573,7 @@ func callLLM(model, systemPrompt, userPrompt string) (string, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+orKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/yourusername/agentflow")
+	req.Header.Set("HTTP-Referer", "https://github.com/tluyben/agentflow")
 	req.Header.Set("X-Title", "AgentFlow")
 
 	resp, err := client.Do(req)

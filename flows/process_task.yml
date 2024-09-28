@@ -1,0 +1,22 @@
+name: process_task
+model: high
+action: [format_response]
+input:
+  type: object
+  properties:
+    processed_query:
+      type: string
+output:
+  type: object
+  properties:
+    steps:
+      type: array
+      items:
+        type: string
+    estimated_time:
+      type: string
+system-prompt: "You are a task planning assistant. Break down tasks into steps and estimate the time required."
+prompt: "Break down the following task into steps and estimate the total time required. Provide your response as JSON with 'steps' (an array of strings) and 'estimated_time' fields: {USER}"
+flow:
+  - validate: "true"
+    next: "$END"
