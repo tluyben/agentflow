@@ -24,19 +24,19 @@ import (
 
 
 type Flow struct {
-	Name          string          `json:"name" yaml:"name"`
-	Model         string          `json:"model" yaml:"model"`
-	Actions       []string        `json:"action" yaml:"action"`
-	Input         json.RawMessage `json:"input" yaml:"input"`
-	Output        json.RawMessage `json:"output" yaml:"output"`
-	SystemPrompt  string          `json:"system-prompt" yaml:"system-prompt"`
-	Prompt        string          `json:"prompt" yaml:"prompt"`
-	FlowSteps     []FlowStep      `json:"flow" yaml:"flow"`
+	Name          string                 `yaml:"name"`
+	Model         string                 `yaml:"model"`
+	Actions       []string               `yaml:"action"`
+	Input         map[string]interface{} `yaml:"input"`
+	Output        map[string]interface{} `yaml:"output"`
+	SystemPrompt  string                 `yaml:"system-prompt"`
+	Prompt        string                 `yaml:"prompt"`
+	FlowSteps     []FlowStep             `yaml:"flow"`
 }
 
 type FlowStep struct {
-	Validate string `json:"validate" yaml:"validate"`
-	Next     string `json:"next" yaml:"next"`
+	Validate string `yaml:"validate"`
+	Next     string `yaml:"next"`
 }
 
 type Action struct {
@@ -79,6 +79,43 @@ var (
 	orModelLow  string
 	searchIndex bleve.Index
 )
+
+func (f *Flow) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type FlowAlias Flow
+	aliasFlow := &struct {
+		*FlowAlias
+		Input  interface{} `yaml:"input"`
+		Output interface{} `yaml:"output"`
+	}{
+		FlowAlias: (*FlowAlias)(f),
+	}
+
+	if err := unmarshal(aliasFlow); err != nil {
+		return err
+	}
+
+	f.Input = toStringKeys(aliasFlow.Input).(map[string]interface{})
+	f.Output = toStringKeys(aliasFlow.Output).(map[string]interface{})
+
+	return nil
+}
+
+func toStringKeys(i interface{}) interface{} {
+	switch x := i.(type) {
+	case map[interface{}]interface{}:
+		m := map[string]interface{}{}
+		for k, v := range x {
+			m[fmt.Sprint(k)] = toStringKeys(v)
+		}
+		return m
+	case []interface{}:
+		for i, v := range x {
+			x[i] = toStringKeys(v)
+		}
+	}
+	return i
+}
+
 
 func main() {
 	app := &cli.App{
@@ -387,9 +424,71 @@ func loadFlows(dir string) error {
 		}
 		return nil
 	})
+	
 }
 
 func loadFlow(path string) (Flow, error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return Flow{}, fmt.Errorf("error reading file %s: %w", path, err)
+	}
+
+	// Unmarshal into a map first
+	var rawMap map[string]interface{}
+	err = yaml.Unmarshal(data, &rawMap)
+	if err != nil {
+		return Flow{}, fmt.Errorf("error parsing file %s: %w", path, err)
+	}
+
+	// Print the raw map
+	fmt.Printf("Raw map content for %s:\n%+v\n", path, rawMap)
+
+	// Manually create and populate the Flow struct
+	flow := Flow{}
+	if name, ok := rawMap["name"].(string); ok {
+		flow.Name = name
+	}
+	if model, ok := rawMap["model"].(string); ok {
+		flow.Model = model
+	}
+	if actions, ok := rawMap["action"].([]interface{}); ok {
+		for _, action := range actions {
+			if actionStr, ok := action.(string); ok {
+				flow.Actions = append(flow.Actions, actionStr)
+			}
+		}
+	}
+	flow.Input, _ = rawMap["input"].(map[string]interface{})
+	flow.Output, _ = rawMap["output"].(map[string]interface{})
+	flow.SystemPrompt, _ = rawMap["system-prompt"].(string)
+	flow.Prompt, _ = rawMap["prompt"].(string)
+	if flowSteps, ok := rawMap["flow"].([]interface{}); ok {
+		for _, step := range flowSteps {
+			if stepMap, ok := step.(map[interface{}]interface{}); ok {
+				flowStep := FlowStep{}
+				if validate, ok := stepMap["validate"].(string); ok {
+					flowStep.Validate = validate
+				}
+				if next, ok := stepMap["next"].(string); ok {
+					flowStep.Next = next
+				}
+				flow.FlowSteps = append(flow.FlowSteps, flowStep)
+			}
+		}
+	}
+
+	// Print the manually created Flow struct
+	fmt.Printf("Manually created Flow struct for %s:\n%+v\n", path, flow)
+
+	// If name is still empty, use the filename
+	if flow.Name == "" {
+		flow.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		fmt.Printf("Name was empty, using filename: %s\n", flow.Name)
+	}
+
+	return flow, nil
+}
+func _loadFlow(path string) (Flow, error) {
 	var flow Flow
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
@@ -446,8 +545,8 @@ func loadAction(path string) (Action, error) {
 }
 
 func startFlow(c *cli.Context) error {
-	if c.NArg() < 1 {
-		return fmt.Errorf("please provide an input for the flow")
+	if c.NArg() < 2 {
+		return fmt.Errorf("please provide a flow name and an input for the flow")
 	}
 
 	err := loadFlowsAndActions(c)
@@ -455,13 +554,15 @@ func startFlow(c *cli.Context) error {
 		return err
 	}
 
-	userInput := c.Args().First()
-	startFlow, ok := flows["start"]
+	flowName := c.Args().Get(0)
+	userInput := c.Args().Get(1)
+
+	selectedFlow, ok := flows[flowName]
 	if !ok {
-		return fmt.Errorf("start flow not found")
+		return fmt.Errorf("flow '%s' not found", flowName)
 	}
 
-	return executeFlow(startFlow, userInput)
+	return executeFlow(selectedFlow, userInput)
 }
 
 func executeFlow(flow Flow, input string) error {
@@ -536,9 +637,15 @@ func executeFlow(flow Flow, input string) error {
 	return fmt.Errorf("no valid next step found")
 }
 
-func validateWithLLM(model string, schema json.RawMessage, input string) (string, error) {
+func validateWithLLM(model string, schema map[string]interface{}, input string) (string, error) {
+
+	schemaJSON, err := json.Marshal(schema)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling schema to JSON: %w\nSchema: %v", err, schema)
+	}
+
 	systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided JSON schema. If the input is valid, return it as is. If it's not valid, modify it to fit the schema. Always return a valid JSON object.`
-	userPrompt := fmt.Sprintf("Schema: %s\n\nInput: %s", string(schema), input)
+	userPrompt := fmt.Sprintf("Schema: %s\n\nInput: %s", string(schemaJSON), input)
 
 	output, err := callLLM(model, systemPrompt, userPrompt)
 	if err != nil {
@@ -547,6 +654,7 @@ func validateWithLLM(model string, schema json.RawMessage, input string) (string
 
 	return output, nil
 }
+
 
 func callLLM(model, systemPrompt, userPrompt string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
