@@ -700,8 +700,8 @@ func executeFlow(flow Flow, input string) error {
 
 	for _, step := range flow.FlowSteps {
 		valid, err := evaluateJSCondition(step.Validate, map[string]interface{}{
-			"input":  validatedInput,
-			"output": validatedOutput,
+			"input":  gjson.Parse(validatedInput).Value(),
+			"output": gjson.Parse(validatedOutput).Value(),
 		})
 		fmt.Println(valid)
 		if err != nil {
@@ -729,7 +729,21 @@ func validateWithLLM(model string, schema []Property, input string) (string, err
 		return "", fmt.Errorf("error marshaling schema to JSON: %w\nSchema: %v", err, schema)
 	}
 
-	systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided JSON schema. If the input is valid, return it as is. If it's not valid, modify it to fit the schema. Always return a valid JSON object.`
+	// systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided JSON schema. If the input is valid, return it as is. If it's not valid, modify it to fit the schema. Always return a valid JSON object.`
+	systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided schema format, which resembles but is not identical to JSON schema. The schema will define an input structure, and your task is to ensure the JSON conforms exactly to it.
+
+For example, if the input is:
+  - name: query
+    type: string
+
+You must return a JSON object like:
+  { "query": "xxx" }
+
+Do NOT return:
+  { "name": "xxx" }.
+
+If the input does not match the required format, you must transform it to fit the schema. Always return a valid JSON object according to the input structure. Never return anything other than a valid JSON object—no explanations, no comments, just the corrected JSON.`
+
 	userPrompt := fmt.Sprintf("Schema: %s\n\nInput: %s", string(schemaJSON), input)
 
 	output, err := callLLM(model, systemPrompt, userPrompt)
