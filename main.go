@@ -85,43 +85,6 @@ var (
 	searchIndex bleve.Index
 )
 
-// func (f *Flow) UnmarshalYAML(unmarshal func(interface{}) error) error {
-// 	type FlowAlias Flow
-// 	aliasFlow := &struct {
-// 		*FlowAlias
-// 		Input  interface{} `yaml:"input"`
-// 		Output interface{} `yaml:"output"`
-// 	}{
-// 		FlowAlias: (*FlowAlias)(f),
-// 	}
-
-// 	if err := unmarshal(aliasFlow); err != nil {
-// 		return err
-// 	}
-
-// 	f.Input = toStringKeys(aliasFlow.Input).(map[string]interface{})
-// 	f.Output = toStringKeys(aliasFlow.Output).(map[string]interface{})
-
-// 	return nil
-// }
-
-// func toStringKeys(i interface{}) interface{} {
-// 	switch x := i.(type) {
-// 	case map[interface{}]interface{}:
-// 		m := map[string]interface{}{}
-// 		for k, v := range x {
-// 			m[fmt.Sprint(k)] = toStringKeys(v)
-// 		}
-// 		return m
-// 	case []interface{}:
-// 		for i, v := range x {
-// 			x[i] = toStringKeys(v)
-// 		}
-// 	}
-// 	return i
-// }
-
-
 func main() {
 	app := &cli.App{
 		Name:  "agentflow",
@@ -431,142 +394,7 @@ func loadFlows(dir string) error {
 	})
 	
 }
-// func (f *Flow) UnmarshalYAML(unmarshal func(interface{}) error) error {
-// 	// Use a map to unmarshal the YAML
-// 	m := make(map[string]interface{})
-// 	err := unmarshal(&m)
-// 	if err != nil {
-// 		return err
-// 	}
 
-// 	// Helper function to safely get string value
-// 	getString := func(v interface{}) string {
-// 		if val, ok := v.(string); ok {
-// 			return val
-// 		}
-// 		return ""
-// 	}
-
-// 	// Helper function to safely get string slice
-// 	getStringSlice := func(v interface{}) []string {
-// 		var result []string
-// 		if val, ok := v.([]interface{}); ok {
-// 			for _, item := range val {
-// 				if s, ok := item.(string); ok {
-// 					result = append(result, s)
-// 				}
-// 			}
-// 		}
-// 		return result
-// 	}
-
-// 	// Assign values to the Flow struct
-// 	f.Name = getString(m["name"])
-// 	f.Model = getString(m["model"])
-// 	f.Actions = getStringSlice(m["action"])
-// 	f.SystemPrompt = getString(m["system-prompt"])
-// 	f.Prompt = getString(m["prompt"])
-
-// 	// Handle Input and Output
-// 	if input, ok := m["input"].(map[interface{}]interface{}); ok {
-// 		f.Input = make(map[string]interface{})
-// 		for k, v := range input {
-// 			if key, ok := k.(string); ok {
-// 				f.Input[key] = v
-// 			}
-// 		}
-// 	}
-// 	if output, ok := m["output"].(map[interface{}]interface{}); ok {
-// 		f.Output = make(map[string]interface{})
-// 		for k, v := range output {
-// 			if key, ok := k.(string); ok {
-// 				f.Output[key] = v
-// 			}
-// 		}
-// 	}
-
-// 	// Handle FlowSteps
-// 	if flow, ok := m["flow"].([]interface{}); ok {
-// 		for _, step := range flow {
-// 			if stepMap, ok := step.(map[interface{}]interface{}); ok {
-// 				flowStep := FlowStep{
-// 					Validate: getString(stepMap["validate"]),
-// 					Next:     getString(stepMap["next"]),
-// 				}
-// 				f.FlowSteps = append(f.FlowSteps, flowStep)
-// 			}
-// 		}
-// 	}
-
-// 	return nil
-// }
-
-// func _loadFlow(path string) (Flow, error) {
-// 	data, err := ioutil.ReadFile(path)
-// 	if err != nil {
-// 		return Flow{}, fmt.Errorf("error reading file %s: %w", path, err)
-// 	}
-
-// 	// Unmarshal into a map first
-// 	var rawMap map[string]interface{}
-// 	// err = yaml.Unmarshal(data, &rawMap)
-// 	if strings.HasSuffix(path, ".json") {
-// 		err = json.Unmarshal(data, &rawMap)
-// 	} else if strings.HasSuffix(path, ".yml") {
-// 		err = yaml.Unmarshal(data, &rawMap)
-// 	}
-// 	if err != nil {
-// 		return Flow{}, fmt.Errorf("error parsing file %s: %w", path, err)
-// 	}
-
-// 	// Print the raw map
-// 	// fmt.Printf("Raw map content for %s:\n%+v\n", path, rawMap)
-
-// 	// Manually create and populate the Flow struct
-// 	flow := Flow{}
-// 	if name, ok := rawMap["name"].(string); ok {
-// 		flow.Name = name
-// 	}
-// 	if model, ok := rawMap["model"].(string); ok {
-// 		flow.Model = model
-// 	}
-// 	if actions, ok := rawMap["action"].([]interface{}); ok {
-// 		for _, action := range actions {
-// 			if actionStr, ok := action.(string); ok {
-// 				flow.Actions = append(flow.Actions, actionStr)
-// 			}
-// 		}
-// 	}
-// 	flow.Input, _ = rawMap["input"].(map[string]interface{})
-// 	flow.Output, _ = rawMap["output"].(map[string]interface{})
-// 	flow.SystemPrompt, _ = rawMap["system-prompt"].(string)
-// 	flow.Prompt, _ = rawMap["prompt"].(string)
-// 	if flowSteps, ok := rawMap["flow"].([]interface{}); ok {
-// 		for _, step := range flowSteps {
-// 			if stepMap, ok := step.(map[interface{}]interface{}); ok {
-// 				flowStep := FlowStep{}
-// 				if validate, ok := stepMap["validate"].(string); ok {
-// 					flowStep.Validate = validate
-// 				}
-// 				if next, ok := stepMap["next"].(string); ok {
-// 					flowStep.Next = next
-// 				}
-// 				flow.FlowSteps = append(flow.FlowSteps, flowStep)
-// 			}
-// 		}
-// 	}
-
-// 	// Print the manually created Flow struct
-// 	fmt.Printf("Manually created Flow struct for %s-%s:\n%+v\n", path, flow.Name, flow)
-
-// 	// If name is still empty, use the filename
-// 	if flow.Name == "" {
-// 		flow.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-// 		fmt.Printf("Name was empty, using filename: %s\n", flow.Name)
-// 	}
-
-// 	return flow, nil
-// }
 func loadFlow(path string) (Flow, error) {
 	var flow Flow
 	data, err := ioutil.ReadFile(path)
@@ -944,8 +772,6 @@ func callLLM(model, systemPrompt, userPrompt string) (string, error) {
 
 	return openRouterResp.Choices[0].Message.Content, nil
 }
-
-
 
 func executeAction(action Action, input string) (string, error) {
 	vm := goja.New()
