@@ -2,17 +2,13 @@ name: answer_question
 model: high
 action: [format_response]
 input:
-  type: object
-  properties:
-    processed_query:
-      type: string
+  - name: processed_query
+    type: string
 output:
-  type: object
-  properties:
-    answer:
-      type: string
-    confidence:
-      type: number
+  - name: answer
+    type: string
+  - name: confidence
+    type: number
 system-prompt: "You are a knowledgeable assistant. Provide accurate and concise answers to questions."
 prompt: "Answer the following question as accurately and concisely as possible. Provide your confidence in the answer as a number between 0 and 1. Format your response as JSON with 'answer' and 'confidence' fields: {USER}"
 flow:
