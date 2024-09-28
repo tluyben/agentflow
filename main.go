@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -712,6 +713,8 @@ if err != nil {
 		return "", fmt.Errorf("error calling LLM for validation: %w", err)
 	}
 
+	
+
 	return output, nil
 }
 
@@ -770,9 +773,30 @@ func callLLM(model, systemPrompt, userPrompt string) (string, error) {
 		return "", fmt.Errorf("no choices returned from OpenRouter")
 	}
 
-	return openRouterResp.Choices[0].Message.Content, nil
+	output := openRouterResp.Choices[0].Message.Content
+
+	_, output = extractCodeBlock(output)
+
+	return output, nil
 }
 
+func extractCodeBlock(input string) (lang string, content string) {
+	// Regular expression to match ```lang content ```
+	re := regexp.MustCompile("(?s)```(\\w+)?\\n(.*?)```")
+
+	// Find the first match
+	matches := re.FindStringSubmatch(input)
+
+	// If a match is found
+	if len(matches) > 0 {
+		lang = strings.TrimSpace(matches[1])  // The language, if present
+		content = strings.TrimSpace(matches[2]) // The content inside the code block
+		return lang, content
+	}
+
+	// If no match is found, return empty strings
+	return "", input
+}
 func executeAction(action Action, input string) (string, error) {
 	vm := goja.New()
 	vm.Set("input", input)
