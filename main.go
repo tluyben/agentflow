@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -643,6 +644,78 @@ func startFlow(c *cli.Context) error {
 	return executeFlow(selectedFlow, userInput)
 }
 
+// validateAgainstSchema validates a JSON object (inputJSON) against a provided schema (schema)
+// It returns true if the input matches the schema, false otherwise
+func validateStringAgainstSchema(inputJSONString string, schema []Property) bool {
+	// try to convert the inputJSONString to a map
+	var inputJSON interface{}
+	err := json.Unmarshal([]byte(inputJSONString), &inputJSON)
+	if err != nil {
+		fmt.Println("Error unmarshaling input JSON:", err)
+		return false
+	}
+	return validateAgainstSchema(inputJSON, schema)
+}
+func validateAgainstSchema(inputJSON interface{}, schema []Property) bool {
+
+	// inputJSON should be a map or array depending on the schema
+	switch reflect.TypeOf(inputJSON).Kind() {
+	case reflect.Map:
+		inputMap := inputJSON.(map[string]interface{})
+		for _, prop := range schema {
+			// Check if the property is present in the input
+			value, ok := inputMap[prop.Name]
+			if !ok {
+				fmt.Printf("Missing property: %s\n", prop.Name)
+				return false
+			}
+
+			// Validate the type of the property
+			if !validateType(value, prop) {
+				fmt.Printf("Invalid type for property: %s\n", prop.Name)
+				return false
+			}
+		}
+		return true
+	default:
+		fmt.Println("Input JSON is not a valid object")
+		return false
+	}
+}
+
+// validateType checks if the value matches the expected type from the schema
+func validateType(value interface{}, prop Property) bool {
+	switch prop.Type {
+	case "string":
+		return reflect.TypeOf(value).Kind() == reflect.String
+	case "number":
+		kind := reflect.TypeOf(value).Kind()
+		return kind == reflect.Float64 || kind == reflect.Int || kind == reflect.Int64
+	case "object":
+		// If the type is an object, validate against its nested properties
+		if prop.Properties != nil {
+			return validateAgainstSchema(value, prop.Properties)
+		}
+		return reflect.TypeOf(value).Kind() == reflect.Map
+	case "array":
+		// If the type is an array, validate each item in the array (assuming homogenous type)
+		if reflect.TypeOf(value).Kind() == reflect.Slice {
+			array := reflect.ValueOf(value)
+			for i := 0; i < array.Len(); i++ {
+				item := array.Index(i).Interface()
+				if !validateType(item, Property{Type: "object", Properties: prop.Properties}) {
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	default:
+		fmt.Printf("Unknown type: %s\n", prop.Type)
+		return false
+	}
+}
+
 func executeFlow(flow Flow, input string) error {
 	var model string
 	if flow.Model == "high" {
@@ -653,12 +726,16 @@ func executeFlow(flow Flow, input string) error {
 		return fmt.Errorf("invalid model specified in flow: %s", flow.Model)
 	}
 
-	fmt.Println("Executing flow:", flow.Name, flow.Input)
+	// fmt.Println("Executing flow:", flow.Name, flow.Input)
 
-	validatedInput, err := validateWithLLM(model, flow.Input, input)
-	if err != nil {
-		return fmt.Errorf("error validating input: %w", err)
-	}
+	validatedInput := input
+	var err error
+	if (!validateStringAgainstSchema(input, flow.Input)) {
+		validatedInput, err = validateWithLLM(model, flow.Input, input)
+		if err != nil {
+			return fmt.Errorf("error validating input: %w", err)
+		}
+	} 
 
 	systemPrompt := substituteVariables(flow.SystemPrompt, envVars, flowVars)
 	userPrompt := substituteVariables(flow.Prompt, envVars, flowVars)
@@ -668,14 +745,25 @@ func executeFlow(flow Flow, input string) error {
 		userPrompt = strings.ReplaceAll(userPrompt, "{USER}", validatedInput)
 	}
 
-	llmOutput, err := callLLM(model, systemPrompt, userPrompt)
+	systemPromptJson, err := readPrompt("jsongenerate1")
+	if err != nil {
+		return fmt.Errorf("error reading system prompt file: %w", err)
+	}
+
+	llmOutput, err := callLLM(model, systemPrompt+"\n"+systemPromptJson, userPrompt)
 	if err != nil {
 		return fmt.Errorf("error calling LLM: %w", err)
 	}
 
-	validatedOutput, err := validateWithLLM(model, flow.Output, llmOutput)
-	if err != nil {
-		return fmt.Errorf("error validating output: %w", err)
+	fmt.Println("\n\nflow", flow.Name)	
+	fmt.Println("unfiltered output", llmOutput)
+
+	validatedOutput := llmOutput
+	if (!validateStringAgainstSchema(llmOutput, flow.Output)) {
+		validatedOutput, err = validateWithLLM(model, flow.Output, llmOutput)
+		if err != nil {
+			return fmt.Errorf("error validating output: %w", err)
+		}
 	}
 
 	for _, actionName := range flow.Actions {
@@ -695,8 +783,9 @@ func executeFlow(flow Flow, input string) error {
 	}
 
 	// print the input and output
-	// fmt.Println(validatedInput)
-	// fmt.Println(validatedOutput)
+	
+	fmt.Println("input", validatedInput)
+	fmt.Println("output",validatedOutput)
 
 	for _, step := range flow.FlowSteps {
 		valid, err := evaluateJSCondition(step.Validate, map[string]interface{}{
@@ -709,6 +798,7 @@ func executeFlow(flow Flow, input string) error {
 		}
 		if valid {
 			if step.Next == "$END" {
+				// fmt.Println(validatedOutput)
 				return nil
 			}
 			nextFlow, ok := flows[step.Next]
@@ -721,7 +811,15 @@ func executeFlow(flow Flow, input string) error {
 
 	return fmt.Errorf("no valid next step found")
 }
-
+// read file prompts/{name}.txt 
+func readPrompt(name string) (string, error) {
+	promptBytes, err := ioutil.ReadFile("prompts/" + name + ".txt")
+	if err != nil {
+		return "", fmt.Errorf("error reading prompt file: %w", err)
+	}
+	return string(promptBytes), nil
+	
+}
 func validateWithLLM(model string, schema []Property, input string) (string, error) {
 
 	schemaJSON, err := json.Marshal(schema)
@@ -730,19 +828,54 @@ func validateWithLLM(model string, schema []Property, input string) (string, err
 	}
 
 	// systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided JSON schema. If the input is valid, return it as is. If it's not valid, modify it to fit the schema. Always return a valid JSON object.`
-	systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided schema format, which resembles but is not identical to JSON schema. The schema will define an input structure, and your task is to ensure the JSON conforms exactly to it.
+// 	systemPrompt := `You are a JSON validator. Your task is to validate the given input against the provided schema format, which resembles but is not identical to JSON schema. The schema will define an input structure, and your task is to ensure the JSON conforms exactly to it.
 
-For example, if the input is:
-  - name: query
-    type: string
+// For example, if the input is:
+//   - name: query
+//     type: string
 
-You must return a JSON object like:
-  { "query": "xxx" }
+// You must return a JSON object like:
+//   { "query": "xxx" }
 
-Do NOT return:
-  { "name": "xxx" }.
+// Do NOT return:
+//   { "name": "xxx" }.
 
-If the input does not match the required format, you must transform it to fit the schema. Always return a valid JSON object according to the input structure. Never return anything other than a valid JSON object—no explanations, no comments, just the corrected JSON.`
+// If the input does not match the required format, you must transform it to fit the schema. Always return a valid JSON object according to the input structure. Never return anything other than a valid JSON object—no explanations, no comments, just the corrected JSON.`
+systemPrompt, err := readPrompt("jsongenerate1")
+if err != nil {
+	return "", fmt.Errorf("error reading system prompt file: %w", err)
+}
+// systemPrompt := string(systemPromptBytes)
+// systemPrompt = `You are a JSON validator. Your task is to transform input into a valid JSON object based on the provided schema format. The schema specifies the structure of the input or output, including key names and their types. You must carefully map the schema definitions to generate the correct JSON object.
+
+// ### Key rules:
+// 1. The schema will provide a list of properties. Each property has a "name" and a "type".
+// 2. The "name" of the property becomes the key in the JSON object.
+// 3. The value assigned to the key must match the "type" defined in the schema (e.g., string, number, etc.).
+// 4. **Only the values corresponding to the defined "names" in the schema should appear in the final JSON**.
+// 5. **Do not include metadata or any extra fields** that are not defined in the schema.
+
+// ### Examples:
+
+// **Schema (input):**
+//   - name: query
+//     type: string
+
+// **Valid JSON Output:**
+//   { "query": "example query" }
+
+// ---
+
+// **Schema (output):**
+//   - name: answer
+//     type: string
+//   - name: confidence
+//     type: number
+
+// **Valid JSON Output:**
+//   { "answer": "Paris", "confidence": 1.00 }
+
+// If any part of the input does not match the schema, modify it so that it matches. Always return only the valid JSON object—no explanations, no comments, JUST the JSON object that matches the schema.`
 
 	userPrompt := fmt.Sprintf("Schema: %s\n\nInput: %s", string(schemaJSON), input)
 
@@ -757,6 +890,7 @@ If the input does not match the required format, you must transform it to fit th
 
 func callLLM(model, systemPrompt, userPrompt string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
+
 
 	messages := []Message{
 		{Role: "system", Content: systemPrompt},
