@@ -1,0 +1,13 @@
+plugins:
+  - name: read-file
+    description: Read a file from disk and return the content
+    input:
+      - name: filepath
+        type: string
+    output:
+      - name: filepath
+        type: string
+      - name: content
+        type: string
+      - name: file-type
+        type: string

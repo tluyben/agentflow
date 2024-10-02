@@ -20,30 +20,37 @@ import (
 	"github.com/dop251/goja"
 	"github.com/joho/godotenv"
 	"github.com/tidwall/gjson"
+
+	// "github.com/tluyben/agentflow/flow"
+	// "github.com/tluyben/agentflow/plugin"
+	"github.com/tluyben/agentflow/plugins"
+	"github.com/tluyben/agentflow/types"
+
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v2"
 )
-type Property struct {
-	Name          string                 `yaml:"name,omitempty"`
-	Type          string                 `yaml:"type"`
-	Properties    []Property             `yaml:"properties,omitempty"`
-}
 
-type Flow struct {
-	Name          string                 `yaml:"name"`
-	Model         string                 `yaml:"model"`
-	Actions       []string               `yaml:"action"`
-	Input         []Property 			 `yaml:"input"`
-	Output        []Property 			 `yaml:"output"`
-	SystemPrompt  string                 `yaml:"system-prompt"`
-	Prompt        string                 `yaml:"prompt"`
-	FlowSteps     []FlowStep             `yaml:"flow"`
-}
+// type Property struct {
+// 	Name          string                 `yaml:"name,omitempty"`
+// 	Type          string                 `yaml:"type"`
+// 	Properties    []Property             `yaml:"properties,omitempty"`
+// }
 
-type FlowStep struct {
-	Validate string `yaml:"validate"`
-	Next     string `yaml:"next"`
-}
+// type Flow struct {
+// 	Name          string                 `yaml:"name"`
+// 	Model         string                 `yaml:"model"`
+// 	Actions       []string               `yaml:"action"`
+// 	Input         []Property 			 `yaml:"input"`
+// 	Output        []Property 			 `yaml:"output"`
+// 	SystemPrompt  string                 `yaml:"system-prompt"`
+// 	Prompt        string                 `yaml:"prompt"`
+// 	FlowSteps     []FlowStep             `yaml:"flow"`
+// }
+
+// type FlowStep struct {
+// 	Validate string `yaml:"validate"`
+// 	Next     string `yaml:"next"`
+// }
 
 type Action struct {
 	Name   string `json:"name" yaml:"name"`
@@ -75,7 +82,7 @@ type Document struct {
 }
 
 var (
-	flows     map[string]Flow
+	flows     map[string]types.Flow
 	actions   map[string]Action
 	envVars   map[string]string
 	flowVars  map[string]string
@@ -84,6 +91,8 @@ var (
 	orModelHigh string
 	orModelLow  string
 	searchIndex bleve.Index
+	// pluginRegistry *plugin.PluginRegistry
+	// flowExecutor   *flow.FlowExecutor
 )
 
 func main() {
@@ -134,7 +143,7 @@ func main() {
 
 func init() {
 	godotenv.Load()
-	flows = make(map[string]Flow)
+	flows = make(map[string]types.Flow)
 	actions = make(map[string]Action)
 	envVars = make(map[string]string)
 	flowVars = make(map[string]string)
@@ -160,6 +169,17 @@ func init() {
 		fmt.Printf("Error opening or creating search index: %v\n", err)
 		os.Exit(1)
 	}
+
+	_ = plugins.PluginRegistry
+	// pluginRegistry = plugin.NewPluginRegistry()
+	// err = pluginRegistry.LoadPlugins("./plugins")
+	// if err != nil {
+	// 	fmt.Printf("Error loading plugins: %v\n", err)
+	// 	os.Exit(1)
+	// }
+
+	// Initialize flow executor
+	// flowExecutor = flow.NewFlowExecutor(pluginRegistry, callLLM)
 }
 
 func openOrCreateIndex(indexPath string) (bleve.Index, error) {
@@ -262,7 +282,7 @@ func indexFiles(c *cli.Context) error {
 		}
 
 		if !info.IsDir() && isTextFile(path) {
-			content, err := ioutil.ReadFile(path)
+			content, err := os.ReadFile(path)
 			if err != nil {
 				log.Printf("Error reading file %s: %v\n", path, err)
 				return nil // Continue with next file
@@ -326,18 +346,27 @@ func searchAndStartFlow(c *cli.Context) error {
 	query := c.Args().Get(0)
 	flowName := c.Args().Get(1)
 
+	err := loadFlowsAndActions(c)
+	if err != nil {
+		return err
+	}
+
 	searchResults, err := search(query)
 	if err != nil {
 		return fmt.Errorf("error searching: %w", err)
 	}
 
+	// fmt.Println(flows, flowName)
 	flow, ok := flows[flowName]
 	if !ok {
 		return fmt.Errorf("flow %s not found", flowName)
 	}
 
 	input := fmt.Sprintf("Search Query: %s\n\nSearch Results:\n%s", query, searchResults)
-	return executeFlow(flow, input)
+
+	fmt.Println(flow, input)
+	return nil 
+	//return executeFlow(flow, input)
 }
 
 func search(query string) (string, error) {
@@ -396,8 +425,8 @@ func loadFlows(dir string) error {
 	
 }
 
-func loadFlow(path string) (Flow, error) {
-	var flow Flow
+func loadFlow(path string) (types.Flow, error) {
+	var flow types.Flow
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return flow, fmt.Errorf("error reading file %s: %w", path, err)
@@ -457,6 +486,22 @@ func startFlow(c *cli.Context) error {
 		return fmt.Errorf("please provide a flow name and an input for the flow")
 	}
 
+	flowName := c.Args().Get(0)
+	userInput := c.Args().Get(1)
+
+	selectedFlow, ok := flows[flowName]
+	if !ok {
+		return fmt.Errorf("flow '%s' not found", flowName)
+	}
+
+	return executeFlow(selectedFlow, userInput)
+}
+
+func _startFlow(c *cli.Context) error {
+	if c.NArg() < 2 {
+		return fmt.Errorf("please provide a flow name and an input for the flow")
+	}
+
 	err := loadFlowsAndActions(c)
 	if err != nil {
 		return err
@@ -475,7 +520,7 @@ func startFlow(c *cli.Context) error {
 
 // validateAgainstSchema validates a JSON object (inputJSON) against a provided schema (schema)
 // It returns true if the input matches the schema, false otherwise
-func validateStringAgainstSchema(inputJSONString string, schema []Property) bool {
+func validateStringAgainstSchema(inputJSONString string, schema []types.Property) bool {
 	// try to convert the inputJSONString to a map
 	var inputJSON interface{}
 	err := json.Unmarshal([]byte(inputJSONString), &inputJSON)
@@ -485,7 +530,7 @@ func validateStringAgainstSchema(inputJSONString string, schema []Property) bool
 	}
 	return validateAgainstSchema(inputJSON, schema)
 }
-func validateAgainstSchema(inputJSON interface{}, schema []Property) bool {
+func validateAgainstSchema(inputJSON interface{}, schema []types.Property) bool {
 
 	// inputJSON should be a map or array depending on the schema
 	switch reflect.TypeOf(inputJSON).Kind() {
@@ -513,7 +558,7 @@ func validateAgainstSchema(inputJSON interface{}, schema []Property) bool {
 }
 
 // validateType checks if the value matches the expected type from the schema
-func validateType(value interface{}, prop Property) bool {
+func validateType(value interface{}, prop types.Property) bool {
 	switch prop.Type {
 	case "string":
 		return reflect.TypeOf(value).Kind() == reflect.String
@@ -532,7 +577,7 @@ func validateType(value interface{}, prop Property) bool {
 			array := reflect.ValueOf(value)
 			for i := 0; i < array.Len(); i++ {
 				item := array.Index(i).Interface()
-				if !validateType(item, Property{Type: "object", Properties: prop.Properties}) {
+				if !validateType(item, types.Property{Type: "object", Properties: prop.Properties}) {
 					return false
 				}
 			}
@@ -544,8 +589,135 @@ func validateType(value interface{}, prop Property) bool {
 		return false
 	}
 }
+func executeFlow(flow types.Flow, input string) error {
+    var model string
+    if flow.Model == "high" {
+        model = orModelHigh
+    } else if flow.Model == "low" {
+        model = orModelLow
+    } else {
+        return fmt.Errorf("invalid model specified in flow: %s", flow.Model)
+    }
 
-func executeFlow(flow Flow, input string) error {
+    validatedInput := input
+    var err error
+    if (!validateStringAgainstSchema(input, flow.Input)) {
+        validatedInput, err = validateWithLLM(model, flow.Input, input)
+        if err != nil {
+            return fmt.Errorf("error validating input: %w", err)
+        }
+    } 
+
+    systemPrompt := substituteVariables(flow.SystemPrompt, envVars, flowVars)
+    userPrompt := substituteVariables(flow.Prompt, envVars, flowVars)
+    if userPrompt == "" {
+        userPrompt = validatedInput
+    } else {
+        userPrompt = strings.ReplaceAll(userPrompt, "{USER}", validatedInput)
+    }
+
+    systemPromptJson, err := readPrompt("jsongenerate1")
+    if err != nil {
+        return fmt.Errorf("error reading system prompt file: %w", err)
+    }
+
+    llmOutput, err := callLLM(model, systemPrompt+"\n"+systemPromptJson, userPrompt)
+    if err != nil {
+        return fmt.Errorf("error calling LLM: %w", err)
+    }
+
+    fmt.Println("\n\nflow", flow.Name)    
+    fmt.Println("unfiltered output", llmOutput)
+
+    validatedOutput := llmOutput
+    if (!validateStringAgainstSchema(llmOutput, flow.Output)) {
+        validatedOutput, err = validateWithLLM(model, flow.Output, llmOutput)
+        if err != nil {
+            return fmt.Errorf("error validating output: %w", err)
+        }
+    }
+
+    for _, actionName := range flow.Actions {
+        action, ok := actions[actionName]
+        if !ok {
+            return fmt.Errorf("action %s not found", actionName)
+        }
+        validatedOutput, err = executeAction(action, validatedOutput)
+        if err != nil {
+            return fmt.Errorf("error executing action %s: %w", actionName, err)
+        }
+    }
+
+    err = processOutput(validatedOutput)
+    if err != nil {
+        return fmt.Errorf("error processing output: %w", err)
+    }
+
+    fmt.Println("input", validatedInput)
+    fmt.Println("output", validatedOutput)
+
+    for _, step := range flow.FlowSteps {
+	 if strings.HasPrefix(step.Next, "cmd:") {
+            pluginName := strings.TrimPrefix(step.Next, "cmd:")
+            
+            inputSchema, outputSchema, err := plugins.GetPluginSchema(pluginName)
+            if err != nil {
+                return fmt.Errorf("error getting plugin schema: %w", err)
+            }
+
+            mergedInputSchema := append(flow.Input, inputSchema...)
+            mergedOutputSchema := append(flow.Output, outputSchema...)
+
+            formattedInput, err := validateWithLLM(model, mergedInputSchema, validatedOutput)
+            if err != nil {
+                return fmt.Errorf("error formatting plugin input: %w", err)
+            }
+
+            var inputMap map[string]interface{}
+            err = json.Unmarshal([]byte(formattedInput), &inputMap)
+            if err != nil {
+                return fmt.Errorf("error unmarshaling formatted input: %w", err)
+            }
+
+            pluginOutput, err := plugins.ExecutePlugin(pluginName, inputMap)
+            if err != nil {
+                return fmt.Errorf("error executing plugin %s: %w", pluginName, err)
+            }
+
+            formattedOutput, err := json.Marshal(pluginOutput)
+            if err != nil {
+                return fmt.Errorf("error marshaling plugin output: %w", err)
+            }
+
+            validatedOutput, err = validateWithLLM(model, mergedOutputSchema, string(formattedOutput))
+            if err != nil {
+                return fmt.Errorf("error validating plugin output: %w", err)
+            }
+
+            continue
+        }
+        valid, err := evaluateJSCondition(step.Validate, map[string]interface{}{
+            "input":  gjson.Parse(validatedInput).Value(),
+            "output": gjson.Parse(validatedOutput).Value(),
+        })
+        if err != nil {
+            return fmt.Errorf("error evaluating condition: %w", err)
+        }
+        if valid {
+            if step.Next == "$END" {
+                return nil
+            }
+            nextFlow, ok := flows[step.Next]
+            if !ok {
+                return fmt.Errorf("flow %s not found", step.Next)
+            }
+            return executeFlow(nextFlow, validatedOutput)
+        }
+    }
+
+    return fmt.Errorf("no valid next step found")
+}
+func _executeFlow(flow types.Flow, input string) error {
 	var model string
 	if flow.Model == "high" {
 		model = orModelHigh
@@ -617,6 +789,49 @@ func executeFlow(flow Flow, input string) error {
 	fmt.Println("output",validatedOutput)
 
 	for _, step := range flow.FlowSteps {
+
+		if strings.HasPrefix(step.Next, "cmd:") {
+			pluginName := strings.TrimPrefix(step.Next, "cmd:")
+			inputSchema, outputSchema, err := plugins.GetPluginSchema(pluginName)
+			if err != nil {
+				return fmt.Errorf("error getting plugin schema: %w", err)
+			}
+
+			// Merge plugin schema with flow schema
+			mergedInputSchema := append(flow.Input, inputSchema...)
+			mergedOutputSchema := append(flow.Output, outputSchema...)
+
+			// Validate and format input using the merged schema
+			formattedInput, err := validateWithLLM(model, mergedInputSchema, validatedOutput)
+			if err != nil {
+				return fmt.Errorf("error formatting plugin input: %w", err)
+			}
+
+			// Execute plugin
+			var inputMap map[string]interface{}
+			err = json.Unmarshal([]byte(formattedInput), &inputMap)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling formatted input: %w", err)
+			}
+
+			pluginOutput, err := plugins.ExecutePlugin(pluginName, inputMap)
+			if err != nil {
+				return fmt.Errorf("error executing plugin %s: %w", pluginName, err)
+			}
+
+			// Format plugin output
+			formattedOutput, err := json.Marshal(pluginOutput)
+			if err != nil {
+				return fmt.Errorf("error marshaling plugin output: %w", err)
+			}
+
+			validatedOutput, err = validateWithLLM(model, mergedOutputSchema, string(formattedOutput))
+			if err != nil {
+				return fmt.Errorf("error validating plugin output: %w", err)
+			}
+
+			continue
+		}
 		valid, err := evaluateJSCondition(step.Validate, map[string]interface{}{
 			"input":  gjson.Parse(validatedInput).Value(),
 			"output": gjson.Parse(validatedOutput).Value(),
@@ -649,7 +864,7 @@ func readPrompt(name string) (string, error) {
 	return string(promptBytes), nil
 	
 }
-func validateWithLLM(model string, schema []Property, input string) (string, error) {
+func validateWithLLM(model string, schema []types.Property, input string) (string, error) {
 
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {

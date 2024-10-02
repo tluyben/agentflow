@@ -2,3 +2,4 @@
 .env.local
 agentflow
 agentflow.bleve
+plugins/*.so
